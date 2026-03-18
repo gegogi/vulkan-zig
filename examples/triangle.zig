@@ -80,7 +80,7 @@ pub fn main() !void {
         break :blk .{ @intCast(w), @intCast(h) };
     };
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
