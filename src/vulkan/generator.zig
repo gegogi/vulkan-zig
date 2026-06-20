@@ -155,8 +155,8 @@ pub const Generator = struct {
 
     // https://github.com/KhronosGroup/Vulkan-Docs/pull/1556
     fn fixupBitFlags(self: *Generator) !void {
-        var seen_bits = std.StringArrayHashMap(void).init(self.arena.allocator());
-        defer seen_bits.deinit();
+        var seen_bits: std.StringArrayHashMapUnmanaged(void) = .empty;
+        defer seen_bits.deinit(self.arena.allocator());
 
         for (self.registry.decls) |decl| {
             const bitmask = switch (decl.decl_type) {
@@ -165,7 +165,7 @@ pub const Generator = struct {
             };
 
             if (bitmask.bits_enum) |bits_enum| {
-                try seen_bits.put(bits_enum, {});
+                try seen_bits.put(self.arena.allocator(), bits_enum, {});
             }
         }
 

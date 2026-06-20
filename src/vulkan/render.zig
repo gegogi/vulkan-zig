@@ -379,8 +379,8 @@ const Renderer = struct {
     allocator: Allocator,
     registry: *const reg.Registry,
     id_renderer: *IdRenderer,
-    decls_by_name: std.StringArrayHashMap(reg.DeclarationType),
-    structure_types: std.StringHashMap(void),
+    decls_by_name: std.StringArrayHashMapUnmanaged(reg.DeclarationType),
+    structure_types: std.StringHashMapUnmanaged(void),
     have_video: bool,
 
     fn init(
@@ -390,11 +390,11 @@ const Renderer = struct {
         id_renderer: *IdRenderer,
         have_video: bool,
     ) !Self {
-        var decls_by_name = std.StringArrayHashMap(reg.DeclarationType).init(allocator);
-        errdefer decls_by_name.deinit();
+        var decls_by_name: std.StringArrayHashMapUnmanaged(reg.DeclarationType) = .empty;
+        errdefer decls_by_name.deinit(allocator);
 
         for (registry.decls) |*decl| {
-            const result = try decls_by_name.getOrPut(decl.name);
+            const result = try decls_by_name.getOrPut(allocator, decl.name);
             if (result.found_existing) {
                 // Allow overriding 'foreign' types. These are for example the Vulkan Video types
                 // declared as foreign type in the vk.xml, then defined in video.xml. Sometimes
@@ -419,11 +419,11 @@ const Renderer = struct {
             .enumeration => |e| e,
             else => return error.InvalidRegistry,
         };
-        var structure_types = std.StringHashMap(void).init(allocator);
-        errdefer structure_types.deinit();
+        var structure_types: std.StringHashMapUnmanaged(void) = .empty;
+        errdefer structure_types.deinit(allocator);
 
         for (vk_structure_type.fields) |field| {
-            try structure_types.put(field.name, {});
+            try structure_types.put(allocator, field.name, {});
         }
 
         return Self{
@@ -438,7 +438,7 @@ const Renderer = struct {
     }
 
     fn deinit(self: *Self) void {
-        self.decls_by_name.deinit();
+        self.decls_by_name.deinit(self.allocator);
     }
 
     fn writeIdentifier(self: Self, id: []const u8) !void {
