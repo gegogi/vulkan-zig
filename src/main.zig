@@ -152,7 +152,7 @@ pub fn main(init: std.process.Init) !void {
 
     const buffered = aw.writer.buffered();
     const src = buffered[0 .. buffered.len - 1 :0];
-    const tree = std.zig.Ast.parse(allocator, src, .zig) catch |err| switch (err) {
+    const tree = std.zig.Ast.parse(allocator, src, .{}) catch |err| switch (err) {
         error.OutOfMemory => oomPanic(),
     };
 
