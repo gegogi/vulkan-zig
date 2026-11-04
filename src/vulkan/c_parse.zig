@@ -16,6 +16,7 @@ pub const Token = struct {
         name, // Vulkan <name>...</name>
         type_name, // Vulkan <type>...</type>
         enum_name, // Vulkan <enum>...</enum>
+        comment, // Vulkan <comment>...</comment>
         int,
         star,
         comma,
@@ -176,7 +177,7 @@ pub const XmlCTokenizer = struct {
         // by early returning here, otherwise the next check will
         // determine that the input is not valid XML.
         if (mem.eql(u8, elem.tag, "comment")) {
-            return null;
+            if (elem.children.len == 0) return null;
         } else if (elem.children.len != 1 or elem.children[0] != .char_data) {
             return error.InvalidXml;
         }
@@ -188,6 +189,8 @@ pub const XmlCTokenizer = struct {
             return Token{ .kind = .enum_name, .text = text };
         } else if (mem.eql(u8, elem.tag, "name")) {
             return Token{ .kind = .name, .text = text };
+        } else if (mem.eql(u8, elem.tag, "comment")) {
+            return Token{ .kind = .comment, .text = text };
         } else {
             return error.InvalidTag;
         }
@@ -274,8 +277,15 @@ pub fn parseMember(allocator: Allocator, xctok: *XmlCTokenizer, ptrs_optional: b
         .field_type = decl.decl_type,
         .bits = null,
         .is_buffer_len = false,
-        .is_optional = false,
+        .comment = null,
     };
+
+    if (try xctok.peek()) |comment| {
+        if (comment.kind == .comment) {
+            field.comment = comment.text;
+            _ = try xctok.nextNoEof();
+        }
+    }
 
     if (try xctok.peek()) |tok| {
         if (tok.kind != .colon) {
@@ -287,6 +297,13 @@ pub fn parseMember(allocator: Allocator, xctok: *XmlCTokenizer, ptrs_optional: b
         field.bits = try std.fmt.parseInt(usize, bits.text, 10);
 
         // Assume for now that there won't be any invalid C types like `char char* x : 4`.
+
+        if (try xctok.peek()) |comment| {
+            if (comment.kind == .comment) {
+                field.comment = comment.text;
+                _ = try xctok.nextNoEof();
+            }
+        }
 
         if (try xctok.peek()) |_| {
             return error.InvalidSyntax;
@@ -362,7 +379,7 @@ fn parseDeclaration(allocator: Allocator, xctok: *XmlCTokenizer, ptrs_optional: 
     if (tok.kind != .type_name and tok.kind != .id) return error.InvalidSyntax;
     const type_name = tok.text;
 
-    var type_info = TypeInfo{ .name = type_name };
+    var type_info = TypeInfo{ .name = .{ .str = type_name, .is_optional = false } };
 
     // Parse pointers
     type_info = try parsePointers(allocator, xctok, inner_is_const, type_info, ptrs_optional);
@@ -446,7 +463,7 @@ fn parseFnPtrSuffix(allocator: Allocator, xctok: *XmlCTokenizer, return_type: Ty
 
     const first_param = try parseDeclaration(allocator, xctok, ptrs_optional);
     if (first_param.name == null) {
-        if (first_param.decl_type != .name or !mem.eql(u8, first_param.decl_type.name, "void")) {
+        if (first_param.decl_type != .name or !mem.eql(u8, first_param.decl_type.name.str, "void")) {
             return error.InvalidSyntax;
         }
 
@@ -462,7 +479,6 @@ fn parseFnPtrSuffix(allocator: Allocator, xctok: *XmlCTokenizer, return_type: Ty
         .name = first_param.name.?,
         .param_type = first_param.decl_type,
         .is_buffer_len = false,
-        .is_optional = false,
     });
 
     while (true) {
@@ -477,7 +493,6 @@ fn parseFnPtrSuffix(allocator: Allocator, xctok: *XmlCTokenizer, return_type: Ty
             .name = decl.name orelse return error.MissingTypeIdentifier,
             .param_type = decl.decl_type,
             .is_buffer_len = false,
-            .is_optional = false,
         });
     }
 
@@ -647,6 +662,50 @@ test "XmlCTokenizer" {
     });
 }
 
+test "parseMemberWithBits" {
+    const document = try xml.parse(testing.allocator,
+        \\<member len="otherMember">
+        \\  <type>uint32_t</type>
+        \\  <name>flags</name>: 8
+        \\  <comment>Requires pythons</comment>
+        \\</member>
+    );
+    defer document.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    var xctok = XmlCTokenizer.init(document.root);
+    const field = try parseMember(arena.allocator(), &xctok, false);
+
+    try testing.expectEqualSlices(u8, "uint32_t", field.field_type.name.str);
+    try testing.expectEqualSlices(u8, "flags", field.name);
+    try testing.expectEqualSlices(u8, "Requires pythons", field.comment.?);
+    try testing.expect(field.bits == 8);
+}
+
+test "parseMember" {
+    const document = try xml.parse(testing.allocator,
+        \\<member len="otherMember">
+        \\  const <type>char</type>* const*
+        \\  <name>ppMembers</name>
+        \\  <comment>Requires pythons</comment>
+        \\</member>
+    );
+    defer document.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    var xctok = XmlCTokenizer.init(document.root);
+    const field = try parseMember(arena.allocator(), &xctok, false);
+
+    try testing.expect(field.field_type.pointer.is_const);
+    try testing.expect(!field.field_type.pointer.is_optional);
+    try testing.expectEqualSlices(u8, "ppMembers", field.name);
+    try testing.expectEqualSlices(u8, "Requires pythons", field.comment.?);
+}
+
 test "parseTypedef" {
     const document = try xml.parse(testing.allocator,
         \\<root> // comment <name>commented name</name> trailing
@@ -668,5 +727,5 @@ test "parseTypedef" {
     try testing.expectEqual(ArraySize{ .int = 4 }, array.size);
     const ptr = array.child.pointer;
     try testing.expectEqual(true, ptr.is_const);
-    try testing.expectEqualSlices(u8, "Python", ptr.child.name);
+    try testing.expectEqualSlices(u8, "Python", ptr.child.name.str);
 }

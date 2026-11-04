@@ -22,7 +22,7 @@ pub const Swapchain = struct {
     next_image_acquired: vk.Semaphore,
 
     pub fn init(gc: *const GraphicsContext, allocator: Allocator, extent: vk.Extent2D) !Swapchain {
-        return try initRecycle(gc, allocator, extent, .null_handle);
+        return try initRecycle(gc, allocator, extent, .null);
     }
 
     pub fn initRecycle(gc: *const GraphicsContext, allocator: Allocator, extent: vk.Extent2D, old_handle: vk.SwapchainKHR) !Swapchain {
@@ -53,12 +53,12 @@ pub const Swapchain = struct {
             .image_color_space = surface_format.color_space,
             .image_extent = actual_extent,
             .image_array_layers = 1,
-            .image_usage = .{ .color_attachment_bit = true, .transfer_dst_bit = true },
+            .image_usage = .{ .color_attachment = true, .transfer_dst = true },
             .image_sharing_mode = sharing_mode,
             .queue_family_index_count = qfi.len,
             .p_queue_family_indices = &qfi,
             .pre_transform = caps.current_transform,
-            .composite_alpha = .{ .opaque_bit_khr = true },
+            .composite_alpha = .{ .opaque_khr = true },
             .present_mode = present_mode,
             .clipped = .true,
             .old_swapchain = old_handle,
@@ -67,7 +67,7 @@ pub const Swapchain = struct {
         };
         errdefer gc.dev.destroySwapchainKHR(handle, null);
 
-        if (old_handle != .null_handle) {
+        if (old_handle != .null) {
             // Apparently, the old swapchain handle still needs to be destroyed after recreating.
             gc.dev.destroySwapchainKHR(old_handle, null);
         }
@@ -81,7 +81,7 @@ pub const Swapchain = struct {
         var next_image_acquired = try gc.dev.createSemaphore(&.{}, null);
         errdefer gc.dev.destroySemaphore(next_image_acquired, null);
 
-        const result = try gc.dev.acquireNextImageKHR(handle, std.math.maxInt(u64), next_image_acquired, .null_handle);
+        const result = try gc.dev.acquireNextImageKHR(handle, std.math.maxInt(u64), next_image_acquired, .null);
         // event with a .suboptimal_khr we can still go on to present
         // if we error even for .suboptimal_khr the example will crash and segfault
         // on resize, since even the recreated swapchain can be suboptimal during a
@@ -116,7 +116,7 @@ pub const Swapchain = struct {
 
     pub fn deinit(self: Swapchain) void {
         // if we have no swapchain none of these should exist and we can just return
-        if (self.handle == .null_handle) return;
+        if (self.handle == .null) return;
         self.deinitExceptSwapchain();
         self.gc.dev.destroySwapchainKHR(self.handle, null);
     }
@@ -134,7 +134,7 @@ pub const Swapchain = struct {
 
         // set current handle to NULL_HANDLE to signal that the current swapchain does no longer need to be
         // de-initialized if we fail to recreate it.
-        self.handle = .null_handle;
+        self.handle = .null;
         self.* = initRecycle(gc, allocator, new_extent, old_handle) catch |err| switch (err) {
             error.SwapchainCreationFailed => {
                 // we failed while recreating so our current handle still exists,
@@ -178,7 +178,7 @@ pub const Swapchain = struct {
         try self.gc.dev.resetFences(&.{current.frame_fence});
 
         // Step 2: Submit the command buffer
-        const wait_stage = [_]vk.PipelineStageFlags{.{ .top_of_pipe_bit = true }};
+        const wait_stage = [_]vk.PipelineStageFlags{.{ .top_of_pipe = true }};
         try self.gc.dev.queueSubmit(self.gc.graphics_queue.handle, &.{.{
             .wait_semaphore_count = 1,
             .p_wait_semaphores = @ptrCast(&current.image_acquired),
@@ -203,7 +203,7 @@ pub const Swapchain = struct {
             self.handle,
             std.math.maxInt(u64),
             self.next_image_acquired,
-            .null_handle,
+            .null,
         );
 
         std.mem.swap(vk.Semaphore, &self.swap_images[result.image_index].image_acquired, &self.next_image_acquired);
@@ -231,7 +231,7 @@ const SwapImage = struct {
             .format = format,
             .components = .{ .r = .identity, .g = .identity, .b = .identity, .a = .identity },
             .subresource_range = .{
-                .aspect_mask = .{ .color_bit = true },
+                .aspect_mask = .{ .color = true },
                 .base_mip_level = 0,
                 .level_count = 1,
                 .base_array_layer = 0,
@@ -246,7 +246,7 @@ const SwapImage = struct {
         const render_finished = try gc.dev.createSemaphore(&.{}, null);
         errdefer gc.dev.destroySemaphore(render_finished, null);
 
-        const frame_fence = try gc.dev.createFence(&.{ .flags = .{ .signaled_bit = true } }, null);
+        const frame_fence = try gc.dev.createFence(&.{ .flags = .{ .signaled = true } }, null);
         errdefer gc.dev.destroyFence(frame_fence, null);
 
         return SwapImage{

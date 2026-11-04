@@ -8,7 +8,9 @@ pub const Registry = struct {
     api_constants: []ApiConstant,
     tags: []Tag,
     features: []Feature,
-    extensions: []Extension,
+    instance_extensions: []Extension,
+    device_extensions: []Extension,
+    video_extensions: []Extension,
 };
 
 pub const Declaration = struct {
@@ -47,6 +49,7 @@ pub const ApiConstant = struct {
 
     name: []const u8,
     value: Value,
+    comment: ?[]const u8,
 };
 
 pub const Tag = struct {
@@ -55,10 +58,24 @@ pub const Tag = struct {
 };
 
 pub const TypeInfo = union(enum) {
-    name: []const u8,
+    name: Name,
     command_ptr: Command,
     pointer: Pointer,
     array: Array,
+
+    pub const Name = struct {
+        str: []const u8,
+        is_optional: bool,
+    };
+
+    pub fn isOptional(self: TypeInfo) bool {
+        return switch (self) {
+            .name => |n| n.is_optional,
+            .pointer => |p| p.is_optional,
+            .array => |a| a.is_optional,
+            .command_ptr => true,
+        };
+    }
 };
 
 pub const Container = struct {
@@ -67,13 +84,14 @@ pub const Container = struct {
         field_type: TypeInfo,
         bits: ?usize,
         is_buffer_len: bool,
-        is_optional: bool,
+        comment: ?[]const u8,
     };
 
     stype: ?[]const u8,
     extends: ?[]const []const u8,
     fields: []Field,
     is_union: bool,
+    comment: ?[]const u8,
 };
 
 pub const Enum = struct {
@@ -90,6 +108,7 @@ pub const Enum = struct {
     pub const Field = struct {
         name: []const u8,
         value: Value,
+        comment: ?[]const u8,
     };
 
     fields: []Field,
@@ -112,7 +131,6 @@ pub const Command = struct {
         name: []const u8,
         param_type: TypeInfo,
         is_buffer_len: bool,
-        is_optional: bool,
     };
 
     params: []Param,
@@ -177,12 +195,6 @@ pub const Feature = struct {
 };
 
 pub const Extension = struct {
-    pub const ExtensionType = enum {
-        instance,
-        device,
-        video,
-    };
-
     pub const Promotion = union(enum) {
         none,
         feature: FeatureLevel,
@@ -198,7 +210,6 @@ pub const Extension = struct {
     name: []const u8,
     number: u31,
     version: Version,
-    extension_type: ?ExtensionType,
     depends: []const []const u8, // Other extensions
     promoted_to: Promotion,
     platform: ?[]const u8,
@@ -210,7 +221,10 @@ pub const Require = struct {
     pub const EnumExtension = struct {
         pub const Value = union(enum) {
             field: Enum.Field,
-            new_api_constant_expr: []const u8,
+            new_api_constant: struct {
+                expr: []const u8,
+                comment: ?[]const u8,
+            },
         };
         extends: []const u8,
         extnumber: ?u31,

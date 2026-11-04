@@ -1,33 +1,27 @@
 const std = @import("std");
 
-const vkgen = @import("vulkan_zig");
-
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
     const maybe_override_registry = b.option([]const u8, "override-registry", "Override the path to the Vulkan registry used for the examples");
     const use_zig_shaders = b.option(bool, "zig-shader", "Use Zig shaders instead of GLSL") orelse false;
 
-    const registry = b.dependency("vulkan_headers", .{}).path("registry/vk.xml");
-
-    const triangle_exe = b.addExecutable(.{
-        .name = "triangle",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("triangle.zig"),
-            .target = target,
-            .link_libc = true,
-            .optimize = optimize,
-        }),
-        // TODO: Remove this once x86_64 is stable
-        .use_llvm = true,
-    });
-    b.installArtifact(triangle_exe);
+    const vk_headers = b.dependency("vulkan_headers", .{});
+    const registry = vk_headers.path("registry/vk.xml");
 
     const glfw = b.dependency("glfw", .{
         .target = target,
         .optimize = optimize,
+        .wayland = true,
     });
-    triangle_exe.root_module.linkLibrary(glfw.artifact("glfw"));
+
+    const trans_glfw = b.addTranslateC(.{
+        .root_source_file = b.path("c.h"),
+        .target = target,
+        .optimize = optimize,
+    });
+    trans_glfw.addSystemIncludePath(glfw.artifact("glfw").getEmittedIncludeTree());
+    trans_glfw.addSystemIncludePath(vk_headers.path("include"));
 
     const registry_path: std.Build.LazyPath = if (maybe_override_registry) |override_registry|
         .{ .cwd_relative = override_registry }
@@ -38,7 +32,21 @@ pub fn build(b: *std.Build) void {
         .registry = registry_path,
     }).module("vulkan-zig");
 
-    triangle_exe.root_module.addImport("vulkan", vulkan);
+    const triangle_exe = b.addExecutable(.{
+        .name = "triangle",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("triangle.zig"),
+            .target = target,
+            .link_libc = true,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "c", .module = trans_glfw.createModule() },
+                .{ .name = "vulkan", .module = vulkan },
+            },
+        }),
+    });
+    triangle_exe.root_module.linkLibrary(glfw.artifact("glfw"));
+    b.installArtifact(triangle_exe);
 
     if (use_zig_shaders) {
         const spirv_target = b.resolveTargetQuery(.{

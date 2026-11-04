@@ -1,11 +1,11 @@
 const std = @import("std");
 const vk = @import("vulkan");
-const c = @import("c.zig");
+const c = @import("c");
 const Allocator = std.mem.Allocator;
 
 const required_layer_names = [_][*:0]const u8{"VK_LAYER_KHRONOS_validation"};
 
-const required_device_extensions = [_][*:0]const u8{vk.extensions.khr_swapchain.name};
+const required_device_extensions = [_][*:0]const u8{vk.device_extensions.khr_swapchain.name};
 
 /// There are 3 levels of bindings in vulkan-zig:
 /// - The Dispatch types (vk.BaseDispatch, vk.InstanceDispatch, vk.DeviceDispatch)
@@ -29,6 +29,13 @@ const DeviceWrapper = vk.DeviceWrapper;
 const Instance = vk.InstanceProxy;
 const Device = vk.DeviceProxy;
 
+fn getGlfwInstanceProcAddr(instance: ?vk.Instance, procname: [*:0]const u8) vk.PfnVoidFunction {
+    return @ptrCast(c.glfwGetInstanceProcAddress(
+        @ptrCast(instance),
+        procname,
+    ));
+}
+
 pub const GraphicsContext = struct {
     pub const CommandBuffer = vk.CommandBufferProxy;
 
@@ -50,7 +57,7 @@ pub const GraphicsContext = struct {
     pub fn init(allocator: Allocator, app_name: [*:0]const u8, window: *c.GLFWwindow) !GraphicsContext {
         var self: GraphicsContext = undefined;
         self.allocator = allocator;
-        self.vkb = BaseWrapper.load(c.glfwGetInstanceProcAddress);
+        self.vkb = BaseWrapper.load(getGlfwInstanceProcAddr);
 
         if (try checkLayerSupport(&self.vkb, self.allocator) == false) {
             return error.MissingLayer;
@@ -58,11 +65,11 @@ pub const GraphicsContext = struct {
 
         var extension_names: std.ArrayList([*:0]const u8) = .empty;
         defer extension_names.deinit(allocator);
-        try extension_names.append(allocator, vk.extensions.ext_debug_utils.name);
+        try extension_names.append(allocator, vk.instance_extensions.ext_debug_utils.name);
         // the following extensions are to support vulkan in mac os
         // see https://github.com/glfw/glfw/issues/2335
-        try extension_names.append(allocator, vk.extensions.khr_portability_enumeration.name);
-        try extension_names.append(allocator, vk.extensions.khr_get_physical_device_properties_2.name);
+        try extension_names.append(allocator, vk.instance_extensions.khr_portability_enumeration.name);
+        try extension_names.append(allocator, vk.instance_extensions.khr_get_physical_device_properties_2.name);
 
         var glfw_exts_count: u32 = 0;
         const glfw_exts = c.glfwGetRequiredInstanceExtensions(&glfw_exts_count);
@@ -80,9 +87,9 @@ pub const GraphicsContext = struct {
             .pp_enabled_layer_names = @ptrCast(&required_layer_names),
             .enabled_extension_count = @intCast(extension_names.items.len),
             .pp_enabled_extension_names = extension_names.items.ptr,
-            // enumerate_portability_bit_khr to support vulkan in mac os
+            // enumerate_portability_khr to support vulkan in mac os
             // see https://github.com/glfw/glfw/issues/2335
-            .flags = .{ .enumerate_portability_bit_khr = true },
+            .flags = .{ .enumerate_portability_khr = true },
         }, null);
 
         const vki = try allocator.create(InstanceWrapper);
@@ -93,15 +100,15 @@ pub const GraphicsContext = struct {
 
         self.debug_messenger = try self.instance.createDebugUtilsMessengerEXT(&.{
             .message_severity = .{
-                //.verbose_bit_ext = true,
-                //.info_bit_ext = true,
-                .warning_bit_ext = true,
-                .error_bit_ext = true,
+                //.verbose_ext = true,
+                //.info_ext = true,
+                .warning_ext = true,
+                .error_ext = true,
             },
             .message_type = .{
-                .general_bit_ext = true,
-                .validation_bit_ext = true,
-                .performance_bit_ext = true,
+                .general_ext = true,
+                .validation_ext = true,
+                .performance_ext = true,
             },
             .pfn_user_callback = &debugUtilsMessengerCallback,
             .p_user_data = null,
@@ -145,9 +152,9 @@ pub const GraphicsContext = struct {
         return std.mem.sliceTo(&self.props.device_name, 0);
     }
 
-    pub fn findMemoryTypeIndex(self: GraphicsContext, memory_type_bits: u32, flags: vk.MemoryPropertyFlags) !u32 {
+    pub fn findMemoryTypeIndex(self: GraphicsContext, memory_types: u32, flags: vk.MemoryPropertyFlags) !u32 {
         for (self.mem_props.memory_types[0..self.mem_props.memory_type_count], 0..) |mem_type, i| {
-            if (memory_type_bits & (@as(u32, 1) << @truncate(i)) != 0 and mem_type.property_flags.contains(flags)) {
+            if (memory_types & (@as(u32, 1) << @truncate(i)) != 0 and mem_type.property_flags.contains(flags)) {
                 return @truncate(i);
             }
         }
@@ -192,7 +199,13 @@ pub const Queue = struct {
 
 fn createSurface(instance: Instance, window: *c.GLFWwindow) !vk.SurfaceKHR {
     var surface: vk.SurfaceKHR = undefined;
-    if (c.glfwCreateWindowSurface(instance.handle, window, null, &surface) != .success) {
+    const result: vk.Result = @fromBackingInt(@intCast(c.glfwCreateWindowSurface(
+        @ptrCast(instance.handle),
+        window,
+        null,
+        @ptrCast(&surface),
+    )));
+    if (result != .success) {
         return error.SurfaceInitFailed;
     }
 
@@ -224,6 +237,8 @@ fn initializeCandidate(instance: Instance, candidate: DeviceCandidate) !vk.Devic
         .p_queue_create_infos = &qci,
         .enabled_extension_count = required_device_extensions.len,
         .pp_enabled_extension_names = @ptrCast(&required_device_extensions),
+        .enabled_layer_count = 0,
+        .pp_enabled_layer_names = null,
     }, null);
 }
 
@@ -238,13 +253,37 @@ const QueueAllocation = struct {
     present_family: u32,
 };
 
-fn debugUtilsMessengerCallback(severity: vk.DebugUtilsMessageSeverityFlagsEXT, msg_type: vk.DebugUtilsMessageTypeFlagsEXT, callback_data: ?*const vk.DebugUtilsMessengerCallbackDataEXT, _: ?*anyopaque) callconv(.c) vk.Bool32 {
-    const severity_str = if (severity.verbose_bit_ext) "verbose" else if (severity.info_bit_ext) "info" else if (severity.warning_bit_ext) "warning" else if (severity.error_bit_ext) "error" else "unknown";
+fn debugUtilsMessengerCallback(
+    message_severity: vk.DebugUtilsMessageSeverityFlagsEXT,
+    message_types: vk.DebugUtilsMessageTypeFlagsEXT,
+    p_callback_data: ?*const vk.DebugUtilsMessengerCallbackDataEXT,
+    p_user_data: ?*anyopaque,
+) callconv(vk.vulkan_call_conv) vk.Bool32 {
+    _ = message_types;
+    _ = p_user_data;
 
-    const type_str = if (msg_type.general_bit_ext) "general" else if (msg_type.validation_bit_ext) "validation" else if (msg_type.performance_bit_ext) "performance" else if (msg_type.device_address_binding_bit_ext) "device addr" else "unknown";
+    const default: [*:0]const u8 = "Unrecognized validation layer message";
+    const msg = (if (p_callback_data) |cb| cb.p_message else null) orelse default;
+    const log = std.log.scoped(.vulkan);
+    switch (message_severity) {
+        .{ .error_ext = true } => log.err("{s}", .{msg}),
+        .{ .warning_ext = true } => log.warn("{s}", .{msg}),
+        .{ .info_ext = true } => log.info("{s}", .{msg}),
+        .{ .verbose_ext = true } => log.debug("{s}", .{msg}), // reverse order so the worst is printed
+        else => log.info("{s}", .{msg}),
+    }
 
-    const message: [*c]const u8 = if (callback_data) |cb_data| cb_data.p_message else "NO MESSAGE!";
-    std.debug.print("[{s}][{s}]. Message:\n  {s}\n", .{ severity_str, type_str, message });
+    const data = p_callback_data orelse return .false;
+    if (data.object_count == 0 or data.p_objects == null) return .false;
+
+    const objects = data.p_objects.?[0..data.object_count];
+    for (objects) |obj| {
+        const name = if (obj.p_object_name) |ptr| std.mem.span(ptr) else "Unnamed";
+        std.debug.print("    | {s} 0x{x} {s}\n", .{ @tagName(obj.object_type), obj.object_handle, name });
+    }
+    if (message_severity.error_ext == true) @panic("vulkan error");
+    // panic to have the stack trace of where the error happened
+    // besides that sometimes the code crashes something and you have to manually force kill it with killall, panic prevents this
 
     return .false;
 }
@@ -302,7 +341,7 @@ fn allocateQueues(instance: Instance, pdev: vk.PhysicalDevice, allocator: Alloca
     for (families, 0..) |properties, i| {
         const family: u32 = @intCast(i);
 
-        if (graphics_family == null and properties.queue_flags.graphics_bit) {
+        if (graphics_family == null and properties.queue_flags.graphics) {
             graphics_family = family;
         }
 
